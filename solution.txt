@@ -1,0 +1,1243 @@
+Projet Spring + Angular + JWT + Chatbot RAG
+════════════════════════════════════════════
+
+SOLUTION — 5 PARTIES
+
+PARTIE 1 : BACKEND SPRING BOOT
+═══════════════════════════════
+
+Structure
+─────────
+bank-account-backend/
+├── src/main/java/ma/bdcc/bankaccount/
+│   ├── BankAccountApplication.java
+│   ├── entities/Customer, BankAccount, CurrentAccount, SavingAccount, AccountOperation
+│   ├── enums/AccountStatus, OperationType
+│   ├── repositories/CustomerRepository, BankAccountRepository, etc.
+│   ├── dto/CustomerDTO, BankAccountDTO, CurrentAccountDTO, SavingAccountDTO, ...
+│   ├── mappers/BankAccountMapper.java
+│   ├── service/BankService.java, BankServiceImpl.java
+│   ├── web/CustomerRestController, BankAccountRestController, OperationRestController
+│   ├── security/SecurityConfig, JwtAuthenticationFilter, JwtAuthorizationFilter, JwtUtil
+│   └── exception/CustomerNotFoundException, BankAccountNotFoundException, BalanceNotSufficientException
+├── resources/application.properties
+└── pom.xml
+
+1.1 pom.xml
+───────────
+<parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>3.1.5</version>
+</parent>
+<dependencies>
+    <!-- Spring Boot starters -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-data-jpa</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-security</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-validation</artifactId></dependency>
+    <!-- Database -->
+    <dependency><groupId>com.h2database</groupId><artifactId>h2</artifactId><scope>runtime</scope></dependency>
+    <dependency><groupId>com.mysql</groupId><artifactId>mysql-connector-j</artifactId><scope>runtime</scope></dependency>
+    <!-- Lombok -->
+    <dependency><groupId>org.projectlombok</groupId><artifactId>lombok</artifactId><optional>true</optional></dependency>
+    <!-- JWT -->
+    <dependency><groupId>io.jsonwebtoken</groupId><artifactId>jjwt-api</artifactId><version>0.11.5</version></dependency>
+    <dependency><groupId>io.jsonwebtoken</groupId><artifactId>jjwt-impl</artifactId><version>0.11.5</version><scope>runtime</scope></dependency>
+    <dependency><groupId>io.jsonwebtoken</groupId><artifactId>jjwt-jackson</artifactId><version>0.11.5</version><scope>runtime</scope></dependency>
+    <!-- Swagger -->
+    <dependency><groupId>org.springdoc</groupId><artifactId>springdoc-openapi-starter-webmvc-ui</artifactId><version>2.1.0</version></dependency>
+    <!-- MapStruct -->
+    <dependency><groupId>org.mapstruct</groupId><artifactId>mapstruct</artifactId><version>1.5.5.Final</version></dependency>
+    <dependency><groupId>org.mapstruct</groupId><artifactId>mapstruct-processor</artifactId><version>1.5.5.Final</version><scope>provided</scope></dependency>
+</dependencies>
+
+1.2 application.properties
+───────────────────────────
+spring.application.name=bank-account-backend
+server.port=8085
+spring.datasource.url=jdbc:h2:mem:bank-db
+spring.datasource.driverClassName=org.h2.Driver
+spring.datasource.username=sa
+spring.datasource.password=
+spring.jpa.database-platform=org.hibernate.dialect.H2Dialect
+spring.jpa.hibernate.ddl-auto=create
+spring.jpa.show-sql=true
+spring.h2.console.enabled=true
+spring.h2.console.path=/h2-console
+jwt.secret=mySecretKeyForJWTAuthentication2024VeryLongSecretKeyForHS512Algorithm
+jwt.expiration=86400000
+springdoc.api-docs.path=/api-docs
+springdoc.swagger-ui.path=/swagger-ui.html
+
+1.3 Entités JPA
+────────────────
+// Customer
+@Entity @Data @NoArgsConstructor @AllArgsConstructor @Builder
+public class Customer {
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    private String name;
+    private String email;
+    @OneToMany(mappedBy = "customer")
+    private List<BankAccount> bankAccounts;
+}
+
+// Enum AccountStatus
+public enum AccountStatus { CREATED, ACTIVATED, SUSPENDED }
+
+// BankAccount - classe abstraite avec héritage SINGLE_TABLE
+@Entity @Inheritance(strategy = InheritanceType.SINGLE_TABLE)
+@DiscriminatorColumn(name = "type", length = 4)
+@Data @NoArgsConstructor @AllArgsConstructor
+public abstract class BankAccount {
+    @Id private String id;
+    private double balance;
+    private Date createdAt;
+    @Enumerated(EnumType.STRING)
+    private AccountStatus status;
+    @ManyToOne @JoinColumn(name = "customer_id")
+    private Customer customer;
+    @OneToMany(mappedBy = "bankAccount")
+    private List<AccountOperation> accountOperations;
+}
+
+@Entity @DiscriminatorValue("CA")
+@Data @NoArgsConstructor @AllArgsConstructor @Builder
+public class CurrentAccount extends BankAccount {
+    private double overDraft;
+}
+
+@Entity @DiscriminatorValue("SA")
+@Data @NoArgsConstructor @AllArgsConstructor @Builder
+public class SavingAccount extends BankAccount {
+    private double interestRate;
+}
+
+// Types d'opérations
+public enum OperationType { DEBIT, CREDIT }
+
+@Entity @Data @NoArgsConstructor @AllArgsConstructor @Builder
+public class AccountOperation {
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    private Date operationDate;
+    private double amount;
+    @Enumerated(EnumType.STRING)
+    private OperationType type;
+    private String description;
+    private String userId;
+    @ManyToOne @JoinColumn(name = "account_id")
+    private BankAccount bankAccount;
+}
+
+1.4 Repositories
+────────────────
+public interface CustomerRepository extends JpaRepository<Customer, Long> {
+    List<Customer> findByNameContains(String keyword);
+}
+public interface BankAccountRepository extends JpaRepository<BankAccount, String> {}
+public interface CurrentAccountRepository extends JpaRepository<CurrentAccount, String> {}
+public interface SavingAccountRepository extends JpaRepository<SavingAccount, String> {}
+public interface AccountOperationRepository extends JpaRepository<AccountOperation, Long> {
+    List<AccountOperation> findByBankAccountId(String accountId);
+}
+
+1.5 DTOs
+─────────
+@Data @NoArgsConstructor @AllArgsConstructor
+public class CustomerDTO { private Long id; private String name; private String email; }
+
+@Data @NoArgsConstructor @AllArgsConstructor
+public class BankAccountDTO {
+    private String id; private double balance; private Date createdAt;
+    private String status; private CustomerDTO customerDTO; private String type;
+}
+public class CurrentAccountDTO extends BankAccountDTO { private double overDraft; }
+public class SavingAccountDTO extends BankAccountDTO { private double interestRate; }
+
+@Data @NoArgsConstructor @AllArgsConstructor
+public class AccountOperationDTO {
+    private Long id; private Date operationDate; private double amount;
+    private String type; private String description; private String userId;
+}
+
+@Data @NoArgsConstructor @AllArgsConstructor
+public class DebitDTO { private String accountId; private double amount; private String description; }
+public class CreditDTO { private String accountId; private double amount; private String description; }
+public class TransferDTO { private String accountSource; private String accountDestination; private double amount; }
+
+1.6 Mapper (MapStruct / BeanUtils)
+────────────────────────────────────
+// J'ai utilisé BeanUtils au lieu de MapStruct parce que c'est plus simple
+@Service
+public class BankAccountMapper {
+    public CustomerDTO fromCustomer(Customer customer) {
+        CustomerDTO dto = new CustomerDTO(); BeanUtils.copyProperties(customer, dto); return dto;
+    }
+    public Customer fromCustomerDTO(CustomerDTO dto) {
+        Customer customer = new Customer(); BeanUtils.copyProperties(dto, customer); return customer;
+    }
+    public BankAccountDTO fromBankAccount(BankAccount bankAccount) {
+        if (bankAccount instanceof CurrentAccount) {
+            CurrentAccountDTO dto = new CurrentAccountDTO();
+            BeanUtils.copyProperties(bankAccount, dto);
+            dto.setOverDraft(((CurrentAccount) bankAccount).getOverDraft());
+            dto.setType("CA"); dto.setCustomerDTO(fromCustomer(bankAccount.getCustomer()));
+            return dto;
+        } else if (bankAccount instanceof SavingAccount) {
+            SavingAccountDTO dto = new SavingAccountDTO();
+            BeanUtils.copyProperties(bankAccount, dto);
+            dto.setInterestRate(((SavingAccount) bankAccount).getInterestRate());
+            dto.setType("SA"); dto.setCustomerDTO(fromCustomer(bankAccount.getCustomer()));
+            return dto;
+        }
+        return null;
+    }
+    public AccountOperationDTO fromAccountOperation(AccountOperation op) {
+        AccountOperationDTO dto = new AccountOperationDTO();
+        BeanUtils.copyProperties(op, dto); dto.setType(op.getType().toString());
+        return dto;
+    }
+}
+
+1.7 Service Layer
+─────────────────
+public interface BankService {
+    CustomerDTO saveCustomer(CustomerDTO dto);
+    List<CustomerDTO> listCustomers();
+    CustomerDTO getCustomer(Long customerId);
+    CustomerDTO updateCustomer(Long id, CustomerDTO dto);
+    void deleteCustomer(Long customerId);
+    List<CustomerDTO> searchCustomers(String keyword);
+    CurrentAccountDTO saveCurrentAccount(double initialBalance, double overDraft, Long customerId);
+    SavingAccountDTO saveSavingAccount(double initialBalance, double interestRate, Long customerId);
+    List<BankAccountDTO> listAccounts();
+    BankAccountDTO getAccount(String accountId);
+    void deleteAccount(String accountId);
+    void debit(String accountId, double amount, String description, String userId);
+    void credit(String accountId, double amount, String description, String userId);
+    void transfer(String src, String dest, double amount, String userId);
+    List<AccountOperationDTO> accountHistory(String accountId);
+}
+
+@Service @Transactional
+public class BankServiceImpl implements BankService {
+    private final CustomerRepository customerRepository;
+    private final BankAccountRepository bankAccountRepository;
+    private final CurrentAccountRepository currentAccountRepository;
+    private final SavingAccountRepository savingAccountRepository;
+    private final AccountOperationRepository accountOperationRepository;
+    private final BankAccountMapper mapper;
+
+    // Constructor injection...
+    
+    public CustomerDTO saveCustomer(CustomerDTO dto) {
+        return mapper.fromCustomer(customerRepository.save(mapper.fromCustomerDTO(dto)));
+    }
+    public List<CustomerDTO> listCustomers() {
+        return customerRepository.findAll().stream().map(mapper::fromCustomer).toList();
+    }
+    public CustomerDTO getCustomer(Long id) {
+        return mapper.fromCustomer(customerRepository.findById(id)
+            .orElseThrow(() -> new CustomerNotFoundException("Customer not found: " + id)));
+    }
+    public CustomerDTO updateCustomer(Long id, CustomerDTO dto) {
+        Customer c = customerRepository.findById(id)
+            .orElseThrow(() -> new CustomerNotFoundException("Customer not found: " + id));
+        if (dto.getName() != null) c.setName(dto.getName());
+        if (dto.getEmail() != null) c.setEmail(dto.getEmail());
+        return mapper.fromCustomer(customerRepository.save(c));
+    }
+    public void deleteCustomer(Long id) { customerRepository.deleteById(id); }
+    public List<CustomerDTO> searchCustomers(String keyword) {
+        return customerRepository.findByNameContains(keyword).stream().map(mapper::fromCustomer).toList();
+    }
+
+    public CurrentAccountDTO saveCurrentAccount(double balance, double overDraft, Long customerId) {
+        Customer c = customerRepository.findById(customerId)
+            .orElseThrow(() -> new CustomerNotFoundException("Customer not found"));
+        CurrentAccount acc = CurrentAccount.builder().id(UUID.randomUUID().toString())
+            .balance(balance).createdAt(new Date()).status(AccountStatus.CREATED)
+            .customer(c).overDraft(overDraft).build();
+        return (CurrentAccountDTO) mapper.fromBankAccount(currentAccountRepository.save(acc));
+    }
+
+    public SavingAccountDTO saveSavingAccount(double balance, double rate, Long customerId) {
+        Customer c = customerRepository.findById(customerId)
+            .orElseThrow(() -> new CustomerNotFoundException("Customer not found"));
+        SavingAccount acc = SavingAccount.builder().id(UUID.randomUUID().toString())
+            .balance(balance).createdAt(new Date()).status(AccountStatus.CREATED)
+            .customer(c).interestRate(rate).build();
+        return (SavingAccountDTO) mapper.fromBankAccount(savingAccountRepository.save(acc));
+    }
+
+    public List<BankAccountDTO> listAccounts() {
+        return bankAccountRepository.findAll().stream().map(mapper::fromBankAccount).toList();
+    }
+    public BankAccountDTO getAccount(String id) {
+        return mapper.fromBankAccount(bankAccountRepository.findById(id)
+            .orElseThrow(() -> new BankAccountNotFoundException("Account not found: " + id)));
+    }
+    public void deleteAccount(String id) { bankAccountRepository.deleteById(id); }
+
+    public void debit(String accountId, double amount, String desc, String userId) {
+        BankAccount account = bankAccountRepository.findById(accountId)
+            .orElseThrow(() -> new BankAccountNotFoundException("Account not found"));
+        if (account.getBalance() < amount) throw new BalanceNotSufficientException("Balance insufficient");
+        accountOperationRepository.save(AccountOperation.builder().operationDate(new Date())
+            .amount(amount).type(OperationType.DEBIT).description(desc).userId(userId).bankAccount(account).build());
+        account.setBalance(account.getBalance() - amount);
+        bankAccountRepository.save(account);
+    }
+
+    public void credit(String accountId, double amount, String desc, String userId) {
+        BankAccount account = bankAccountRepository.findById(accountId)
+            .orElseThrow(() -> new BankAccountNotFoundException("Account not found"));
+        accountOperationRepository.save(AccountOperation.builder().operationDate(new Date())
+            .amount(amount).type(OperationType.CREDIT).description(desc).userId(userId).bankAccount(account).build());
+        account.setBalance(account.getBalance() + amount);
+        bankAccountRepository.save(account);
+    }
+
+    public void transfer(String src, String dest, double amount, String userId) {
+        debit(src, amount, "Transfer to " + dest, userId);
+        credit(dest, amount, "Transfer from " + src, userId);
+    }
+
+    public List<AccountOperationDTO> accountHistory(String accountId) {
+        return accountOperationRepository.findByBankAccountId(accountId)
+            .stream().map(mapper::fromAccountOperation).toList();
+    }
+}
+
+1.8 RestControllers
+───────────────────
+@RestController @RequestMapping("/api/customers") @CrossOrigin("*")
+public class CustomerRestController {
+    private final BankService bankService;
+    public CustomerRestController(BankService bankService) { this.bankService = bankService; }
+
+    @GetMapping
+    public List<CustomerDTO> customers(@RequestParam(name = "keyword", defaultValue = "") String keyword) {
+        return keyword.isEmpty() ? bankService.listCustomers() : bankService.searchCustomers(keyword);
+    }
+    @GetMapping("/{id}") public CustomerDTO getCustomer(@PathVariable Long id) { return bankService.getCustomer(id); }
+    @PostMapping public CustomerDTO saveCustomer(@RequestBody CustomerDTO dto) { return bankService.saveCustomer(dto); }
+    @PutMapping("/{id}") public CustomerDTO updateCustomer(@PathVariable Long id, @RequestBody CustomerDTO dto) { return bankService.updateCustomer(id, dto); }
+    @DeleteMapping("/{id}") public void deleteCustomer(@PathVariable Long id) { bankService.deleteCustomer(id); }
+}
+
+@RestController @RequestMapping("/api/accounts") @CrossOrigin("*")
+public class BankAccountRestController {
+    private final BankService bankService;
+    public BankAccountRestController(BankService bankService) { this.bankService = bankService; }
+
+    @GetMapping public List<BankAccountDTO> listAccounts() { return bankService.listAccounts(); }
+    @GetMapping("/{id}") public BankAccountDTO getAccount(@PathVariable String id) { return bankService.getAccount(id); }
+
+    @PostMapping("/current")
+    public CurrentAccountDTO saveCurrentAccount(@RequestBody Map<String, Object> data) {
+        return bankService.saveCurrentAccount(
+            Double.parseDouble(data.get("initialBalance").toString()),
+            Double.parseDouble(data.get("overDraft").toString()),
+            Long.parseLong(data.get("customerId").toString()));
+    }
+
+    @PostMapping("/saving")
+    public SavingAccountDTO saveSavingAccount(@RequestBody Map<String, Object> data) {
+        return bankService.saveSavingAccount(
+            Double.parseDouble(data.get("initialBalance").toString()),
+            Double.parseDouble(data.get("interestRate").toString()),
+            Long.parseLong(data.get("customerId").toString()));
+    }
+
+    @DeleteMapping("/{id}") public void deleteAccount(@PathVariable String id) { bankService.deleteAccount(id); }
+    @GetMapping("/{id}/operations") public List<AccountOperationDTO> getHistory(@PathVariable String id) { return bankService.accountHistory(id); }
+}
+
+@RestController @RequestMapping("/api/operations") @CrossOrigin("*")
+public class OperationRestController {
+    private final BankService bankService;
+    public OperationRestController(BankService bankService) { this.bankService = bankService; }
+
+    @PostMapping("/debit")
+    public void debit(@RequestBody DebitDTO dto, Principal principal) {
+        bankService.debit(dto.getAccountId(), dto.getAmount(), dto.getDescription(), principal.getName());
+    }
+    @PostMapping("/credit")
+    public void credit(@RequestBody CreditDTO dto, Principal principal) {
+        bankService.credit(dto.getAccountId(), dto.getAmount(), dto.getDescription(), principal.getName());
+    }
+    @PostMapping("/transfer")
+    public void transfer(@RequestBody TransferDTO dto, Principal principal) {
+        bankService.transfer(dto.getAccountSource(), dto.getAccountDestination(), dto.getAmount(), principal.getName());
+    }
+}
+
+1.9 Exceptions
+───────────────
+public class CustomerNotFoundException extends RuntimeException {
+    public CustomerNotFoundException(String msg) { super(msg); }
+}
+public class BankAccountNotFoundException extends RuntimeException {
+    public BankAccountNotFoundException(String msg) { super(msg); }
+}
+public class BalanceNotSufficientException extends RuntimeException {
+    public BalanceNotSufficientException(String msg) { super(msg); }
+}
+
+1.10 Classe principale + seed data
+───────────────────────────────────
+@SpringBootApplication
+public class BankAccountApplication {
+    public static void main(String[] args) { SpringApplication.run(BankAccountApplication.class, args); }
+
+    @Bean
+    CommandLineRunner start(BankService bankService) {
+        return args -> {
+            CustomerDTO c1 = bankService.saveCustomer(new CustomerDTO(null, "Mohamed Alaoui", "m.alaoui@email.com"));
+            CustomerDTO c2 = bankService.saveCustomer(new CustomerDTO(null, "Fatima Benali", "f.benali@email.com"));
+            CustomerDTO c3 = bankService.saveCustomer(new CustomerDTO(null, "Ahmed Chafik", "a.chafik@email.com"));
+            bankService.saveCurrentAccount(5000, 1000, c1.getId());
+            bankService.saveSavingAccount(10000, 3.5, c1.getId());
+            bankService.saveCurrentAccount(8000, 2000, c2.getId());
+            bankService.saveSavingAccount(15000, 4.0, c3.getId());
+            System.out.println("Données créées: " + bankService.listCustomers().size() + " clients, " + bankService.listAccounts().size() + " comptes");
+        };
+    }
+}
+
+PARTIE 2 : CLIENT ANGULAR
+══════════════════════════
+
+Structure
+─────────
+bank-account-angular/
+├── src/app/
+│   ├── models/customer.model.ts, account.model.ts, operation.model.ts
+│   ├── services/customer.service.ts, account.service.ts, auth.service.ts
+│   ├── guards/auth.guard.ts, interceptors/jwt.interceptor.ts
+│   └── components/navbar, customers, accounts, operations, dashboard, login
+├── index.html, main.ts, styles.css
+└── package.json
+
+2.1 Modèles
+───────────
+export interface Customer { id?: number; name: string; email: string; }
+
+export interface BankAccount {
+    id: string; balance: number; createdAt: Date; status: string;
+    type: string; customerDTO: Customer; overDraft?: number; interestRate?: number;
+}
+
+export interface AccountOperation {
+    id: number; operationDate: Date; amount: number; type: string;
+    description: string; userId: string;
+}
+
+2.2 Services
+─────────────
+@Injectable({ providedIn: 'root' })
+export class CustomerService {
+    private baseUrl = 'http://localhost:8085/api/customers';
+    constructor(private http: HttpClient) {}
+    getCustomers(keyword = ''): Observable<Customer[]> { return this.http.get<Customer[]>(`${this.baseUrl}?keyword=${keyword}`); }
+    getCustomer(id: number): Observable<Customer> { return this.http.get<Customer>(`${this.baseUrl}/${id}`); }
+    saveCustomer(c: Customer): Observable<Customer> { return this.http.post<Customer>(this.baseUrl, c); }
+    updateCustomer(id: number, c: Customer): Observable<Customer> { return this.http.put<Customer>(`${this.baseUrl}/${id}`, c); }
+    deleteCustomer(id: number): Observable<void> { return this.http.delete<void>(`${this.baseUrl}/${id}`); }
+}
+
+@Injectable({ providedIn: 'root' })
+export class AccountService {
+    private baseUrl = 'http://localhost:8085/api';
+    constructor(private http: HttpClient) {}
+    getAccounts(): Observable<BankAccount[]> { return this.http.get<BankAccount[]>(`${this.baseUrl}/accounts`); }
+    getAccount(id: string): Observable<BankAccount> { return this.http.get<BankAccount>(`${this.baseUrl}/accounts/${id}`); }
+    saveCurrentAccount(data: any): Observable<BankAccount> { return this.http.post<BankAccount>(`${this.baseUrl}/accounts/current`, data); }
+    saveSavingAccount(data: any): Observable<BankAccount> { return this.http.post<BankAccount>(`${this.baseUrl}/accounts/saving`, data); }
+    deleteAccount(id: string): Observable<void> { return this.http.delete<void>(`${this.baseUrl}/accounts/${id}`); }
+    getOperations(accountId: string): Observable<AccountOperation[]> { return this.http.get<AccountOperation[]>(`${this.baseUrl}/accounts/${accountId}/operations`); }
+    debit(data: any): Observable<void> { return this.http.post<void>(`${this.baseUrl}/operations/debit`, data); }
+    credit(data: any): Observable<void> { return this.http.post<void>(`${this.baseUrl}/operations/credit`, data); }
+    transfer(data: any): Observable<void> { return this.http.post<void>(`${this.baseUrl}/operations/transfer`, data); }
+}
+
+@Injectable({ providedIn: 'root' })
+export class AuthService {
+    private baseUrl = 'http://localhost:8085/api/auth';
+    private tokenKey = 'jwt_token';
+    private usernameSubject = new BehaviorSubject<string | null>(null);
+
+    constructor(private http: HttpClient, private router: Router) {
+        if (this.getToken()) this.usernameSubject.next(this.decodeToken()?.sub || null);
+    }
+
+    login(username: string, password: string): Observable<any> {
+        return this.http.post<any>(`${this.baseUrl}/login`, { username, password }).pipe(
+            tap(r => { localStorage.setItem(this.tokenKey, r.accessToken); localStorage.setItem('refreshToken', r.refreshToken); this.usernameSubject.next(username); })
+        );
+    }
+    logout(): void { localStorage.removeItem(this.tokenKey); localStorage.removeItem('refreshToken'); this.usernameSubject.next(null); this.router.navigate(['/login']); }
+    getToken(): string | null { return localStorage.getItem(this.tokenKey); }
+    getUsername(): Observable<string | null> { return this.usernameSubject.asObservable(); }
+    isAuthenticated(): boolean {
+        const token = this.getToken(); if (!token) return false;
+        const payload = this.decodeToken(); if (!payload) return false;
+        return payload.exp * 1000 > Date.now();
+    }
+    private decodeToken(): any { try { return JSON.parse(atob(this.getToken()!.split('.')[1])); } catch { return null; } }
+}
+
+2.3 JWT Interceptor
+───────────────────
+// Ajoute le token Bearer automatiquement à chaque requête HTTP
+@Injectable()
+export class JwtInterceptor implements HttpInterceptor {
+    constructor(private authService: AuthService) {}
+    intercept(req: HttpRequest<any>, next: HttpHandler): Observable<HttpEvent<any>> {
+        const token = this.authService.getToken();
+        if (token) req = req.clone({ setHeaders: { Authorization: `Bearer ${token}` } });
+        return next.handle(req);
+    }
+}
+
+2.4 Auth Guard
+──────────────
+@Injectable({ providedIn: 'root' })
+export class AuthGuard implements CanActivate {
+    constructor(private authService: AuthService, private router: Router) {}
+    canActivate(): boolean {
+        if (this.authService.isAuthenticated()) return true;
+        this.router.navigate(['/login']); return false;
+    }
+}
+
+2.5 Routes
+──────────
+export const routes: Routes = [
+    { path: 'login', component: LoginComponent },
+    { path: '', redirectTo: '/dashboard', pathMatch: 'full' },
+    { path: 'customers', component: CustomersComponent, canActivate: [AuthGuard] },
+    { path: 'customers/add', component: CustomerFormComponent, canActivate: [AuthGuard] },
+    { path: 'customers/edit/:id', component: CustomerFormComponent, canActivate: [AuthGuard] },
+    { path: 'accounts', component: AccountsComponent, canActivate: [AuthGuard] },
+    { path: 'accounts/:id', component: AccountDetailComponent, canActivate: [AuthGuard] },
+    { path: 'dashboard', component: DashboardComponent, canActivate: [AuthGuard] },
+    { path: '**', redirectTo: '/dashboard' }
+];
+
+2.6 Components
+──────────────
+
+Login Component
+───────────────
+@Component({
+    selector: 'app-login', standalone: true, imports: [CommonModule, FormsModule, RouterModule],
+    template: `
+    <div class="container mt-5"><div class="row justify-content-center"><div class="col-md-4">
+      <div class="card"><div class="card-header bg-primary text-white text-center"><h4>Connexion</h4></div>
+        <div class="card-body">
+          <div *ngIf="error" class="alert alert-danger">{{ error }}</div>
+          <form (ngSubmit)="onLogin()">
+            <div class="mb-3"><label>Utilisateur</label><input type="text" class="form-control" [(ngModel)]="username" name="username" required></div>
+            <div class="mb-3"><label>Mot de passe</label><input type="password" class="form-control" [(ngModel)]="password" name="password" required></div>
+            <button type="submit" class="btn btn-primary w-100">Se connecter</button>
+          </form>
+        </div>
+      </div>
+    </div></div></div>`
+})
+export class LoginComponent {
+    username = ''; password = ''; error = '';
+    constructor(private authService: AuthService, private router: Router) {}
+    onLogin(): void { this.authService.login(this.username, this.password).subscribe({ next: () => this.router.navigate(['/dashboard']), error: () => this.error = 'Identifiants incorrects' }); }
+}
+
+Customers Component
+───────────────────
+@Component({
+    selector: 'app-customers', standalone: true, imports: [CommonModule, RouterModule, FormsModule],
+    template: `
+    <div class="container mt-4">
+      <div class="card">
+        <div class="card-header bg-primary text-white d-flex justify-content-between">
+          <h3>Clients</h3>
+          <a routerLink="/customers/add" class="btn btn-success btn-sm">+ Nouveau</a>
+        </div>
+        <div class="card-body">
+          <div class="mb-3"><input type="text" class="form-control" placeholder="Rechercher..." [(ngModel)]="keyword" (input)="loadCustomers()"></div>
+          <table class="table table-striped">
+            <thead><tr><th>ID</th><th>Nom</th><th>Email</th><th>Actions</th></tr></thead>
+            <tbody>
+              <tr *ngFor="let c of customers">
+                <td>{{ c.id }}</td><td>{{ c.name }}</td><td>{{ c.email }}</td>
+                <td>
+                  <a [routerLink]="['/customers/edit', c.id]" class="btn btn-sm btn-warning me-1">Modifier</a>
+                  <button (click)="deleteCustomer(c.id!)" class="btn btn-sm btn-danger">Supprimer</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>`
+})
+export class CustomersComponent implements OnInit {
+    customers: Customer[] = []; keyword = '';
+    constructor(private customerService: CustomerService) {}
+    ngOnInit(): void { this.loadCustomers(); }
+    loadCustomers(): void { this.customerService.getCustomers(this.keyword).subscribe(data => this.customers = data); }
+    deleteCustomer(id: number): void { if (confirm('Supprimer ?')) this.customerService.deleteCustomer(id).subscribe(() => this.loadCustomers()); }
+}
+
+CustomerForm Component
+──────────────────────
+@Component({
+    selector: 'app-customer-form', standalone: true, imports: [CommonModule, FormsModule, RouterModule],
+    template: `
+    <div class="container mt-4">
+      <div class="card">
+        <div class="card-header" [class.bg-success]="!isEdit" [class.bg-warning]="isEdit" class="text-white">
+          <h3>{{ isEdit ? 'Modifier' : 'Ajouter' }} un Client</h3>
+        </div>
+        <div class="card-body">
+          <form (ngSubmit)="save()">
+            <div class="mb-3"><label>Nom</label><input type="text" class="form-control" [(ngModel)]="customer.name" name="name" required></div>
+            <div class="mb-3"><label>Email</label><input type="email" class="form-control" [(ngModel)]="customer.email" name="email" required></div>
+            <button type="submit" class="btn btn-primary">{{ isEdit ? 'Mettre à jour' : 'Enregistrer' }}</button>
+            <a routerLink="/customers" class="btn btn-secondary ms-2">Annuler</a>
+          </form>
+        </div>
+      </div>
+    </div>`
+})
+export class CustomerFormComponent implements OnInit {
+    customer: Customer = { name: '', email: '' }; isEdit = false;
+    constructor(private service: CustomerService, private route: ActivatedRoute, private router: Router) {}
+    ngOnInit(): void {
+        const id = this.route.snapshot.paramMap.get('id');
+        if (id) { this.isEdit = true; this.service.getCustomer(+id).subscribe(data => this.customer = data); }
+    }
+    save(): void {
+        if (this.isEdit) this.service.updateCustomer(this.customer.id!, this.customer).subscribe(() => this.router.navigate(['/customers']));
+        else this.service.saveCustomer(this.customer).subscribe(() => this.router.navigate(['/customers']));
+    }
+}
+
+Accounts Component
+──────────────────
+@Component({
+    selector: 'app-accounts', standalone: true, imports: [CommonModule, RouterModule, FormsModule],
+    template: `
+    <div class="container mt-4">
+      <div class="card mb-4">
+        <div class="card-header bg-success text-white"><h4>Nouveau Compte</h4></div>
+        <div class="card-body">
+          <form (ngSubmit)="createAccount()" class="row g-3">
+            <div class="col-md-3">
+              <select class="form-select" [(ngModel)]="newAccount.type" name="type">
+                <option value="CA">Courant</option><option value="SA">Épargne</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <select class="form-select" [(ngModel)]="newAccount.customerId" name="customerId">
+                <option *ngFor="let c of customers" [value]="c.id">{{ c.name }}</option>
+              </select>
+            </div>
+            <div class="col-md-2"><input type="number" class="form-control" placeholder="Solde" [(ngModel)]="newAccount.balance" name="balance"></div>
+            <div class="col-md-2"><input type="number" class="form-control" [placeholder]="newAccount.type==='CA'?'Découvert':'Taux%'" [(ngModel)]="newAccount.extra" name="extra"></div>
+            <div class="col-md-2"><button type="submit" class="btn btn-success w-100">Créer</button></div>
+          </form>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header bg-primary text-white"><h3>Comptes</h3></div>
+        <div class="card-body">
+          <table class="table table-striped">
+            <thead><tr><th>ID</th><th>Type</th><th>Solde</th><th>Client</th><th>Statut</th><th>Actions</th></tr></thead>
+            <tbody>
+              <tr *ngFor="let a of accounts">
+                <td>{{ a.id | slice:0:8 }}...</td>
+                <td><span class="badge" [class.bg-info]="a.type==='CA'" [class.bg-warning]="a.type==='SA'">{{ a.type==='CA'?'Courant':'Épargne' }}</span></td>
+                <td>{{ a.balance | number:'1.2-2' }} €</td>
+                <td>{{ a.customerDTO?.name }}</td><td>{{ a.status }}</td>
+                <td>
+                  <a [routerLink]="['/accounts', a.id]" class="btn btn-sm btn-info me-1">Détail</a>
+                  <button (click)="deleteAccount(a.id)" class="btn btn-sm btn-danger">Supprimer</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>`
+})
+export class AccountsComponent implements OnInit {
+    accounts: BankAccount[] = []; customers: Customer[] = [];
+    newAccount = { type: 'CA', customerId: null, balance: 0, extra: 0 };
+    constructor(private accountService: AccountService, private customerService: CustomerService) {}
+    ngOnInit(): void { this.loadData(); }
+    loadData(): void { this.accountService.getAccounts().subscribe(d => this.accounts = d); this.customerService.getCustomers().subscribe(d => this.customers = d); }
+    createAccount(): void {
+        const data: any = { initialBalance: this.newAccount.balance, customerId: this.newAccount.customerId };
+        if (this.newAccount.type === 'CA') { data.overDraft = this.newAccount.extra; this.accountService.saveCurrentAccount(data).subscribe(() => this.loadData()); }
+        else { data.interestRate = this.newAccount.extra; this.accountService.saveSavingAccount(data).subscribe(() => this.loadData()); }
+    }
+    deleteAccount(id: string): void { if (confirm('Supprimer ?')) this.accountService.deleteAccount(id).subscribe(() => this.loadData()); }
+}
+
+AccountDetail Component
+───────────────────────
+@Component({
+    selector: 'app-account-detail', standalone: true, imports: [CommonModule, FormsModule, RouterModule],
+    template: `
+    <div class="container mt-4">
+      <div *ngIf="account" class="card mb-4">
+        <div class="card-header bg-info text-white"><h3>Compte {{ account.id | slice:0:12 }}...</h3></div>
+        <div class="card-body">
+          <div class="row">
+            <div class="col-md-3"><strong>Solde:</strong> {{ account.balance | number:'1.2-2' }} €</div>
+            <div class="col-md-3"><strong>Type:</strong> {{ account.type==='CA'?'Courant':'Épargne' }}</div>
+            <div class="col-md-3"><strong>Client:</strong> {{ account.customerDTO?.name }}</div>
+            <div class="col-md-3"><strong>Statut:</strong> {{ account.status }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="row mb-4">
+        <div class="col-md-4"><div class="card border-success"><div class="card-body">
+          <h5>Créditer</h5>
+          <input type="number" class="form-control mb-2" [(ngModel)]="creditAmount" placeholder="Montant">
+          <button class="btn btn-success w-100" (click)="doCredit()">Créditer</button>
+        </div></div></div>
+        <div class="col-md-4"><div class="card border-danger"><div class="card-body">
+          <h5>Débiter</h5>
+          <input type="number" class="form-control mb-2" [(ngModel)]="debitAmount" placeholder="Montant">
+          <button class="btn btn-danger w-100" (click)="doDebit()">Débiter</button>
+        </div></div></div>
+        <div class="col-md-4"><div class="card border-primary"><div class="card-body">
+          <h5>Transférer</h5>
+          <input type="text" class="form-control mb-2" [(ngModel)]="transferDest" placeholder="Compte destinataire">
+          <input type="number" class="form-control mb-2" [(ngModel)]="transferAmount" placeholder="Montant">
+          <button class="btn btn-primary w-100" (click)="doTransfer()">Transférer</button>
+        </div></div></div>
+      </div>
+      <div class="card"><div class="card-header bg-dark text-white"><h4>Historique</h4></div>
+        <div class="card-body">
+          <table class="table"><thead><tr><th>Date</th><th>Type</th><th>Montant</th><th>Description</th><th>Utilisateur</th></tr></thead>
+            <tbody>
+              <tr *ngFor="let op of operations">
+                <td>{{ op.operationDate | date:'short' }}</td>
+                <td><span class="badge" [class.bg-success]="op.type==='CREDIT'" [class.bg-danger]="op.type==='DEBIT'">{{ op.type }}</span></td>
+                <td>{{ op.amount | number:'1.2-2' }} €</td>
+                <td>{{ op.description }}</td><td>{{ op.userId }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>`
+})
+export class AccountDetailComponent implements OnInit {
+    account: BankAccount | null = null; operations: AccountOperation[] = [];
+    creditAmount = 0; debitAmount = 0; transferDest = ''; transferAmount = 0; accountId = '';
+    constructor(private route: ActivatedRoute, private accountService: AccountService) {}
+    ngOnInit(): void { this.accountId = this.route.snapshot.paramMap.get('id') || ''; this.loadData(); }
+    loadData(): void { this.accountService.getAccount(this.accountId).subscribe(d => this.account = d); this.accountService.getOperations(this.accountId).subscribe(d => this.operations = d); }
+    doCredit(): void { this.accountService.credit({ accountId: this.accountId, amount: this.creditAmount, description: 'Crédit' }).subscribe(() => { this.loadData(); this.creditAmount = 0; }); }
+    doDebit(): void { this.accountService.debit({ accountId: this.accountId, amount: this.debitAmount, description: 'Débit' }).subscribe(() => { this.loadData(); this.debitAmount = 0; }); }
+    doTransfer(): void { this.accountService.transfer({ accountSource: this.accountId, accountDestination: this.transferDest, amount: this.transferAmount }).subscribe(() => { this.loadData(); this.transferAmount = 0; this.transferDest = ''; }); }
+}
+
+Dashboard Component
+───────────────────
+@Component({
+    selector: 'app-dashboard', standalone: true, imports: [CommonModule],
+    template: `
+    <div class="container mt-4">
+      <h2>Tableau de Bord</h2>
+      <div class="row mb-4">
+        <div class="col-md-3"><div class="card text-bg-primary"><div class="card-body text-center"><h5>Clients</h5><p class="display-6">{{ totalCustomers }}</p></div></div></div>
+        <div class="col-md-3"><div class="card text-bg-success"><div class="card-body text-center"><h5>Comptes</h5><p class="display-6">{{ totalAccounts }}</p></div></div></div>
+        <div class="col-md-3"><div class="card text-bg-warning"><div class="card-body text-center"><h5>Solde Total</h5><p class="display-6">{{ totalBalance | number:'1.0-0' }} €</p></div></div></div>
+        <div class="col-md-3"><div class="card text-bg-info"><div class="card-body text-center"><h5>Solde Moyen</h5><p class="display-6">{{ averageBalance | number:'1.0-0' }} €</p></div></div></div>
+      </div>
+      <div class="row">
+        <div class="col-md-6"><div class="card mb-4"><div class="card-header bg-dark text-white"><h5>Clients</h5></div>
+          <div class="card-body">
+            <table class="table table-sm"><thead><tr><th>Nom</th><th>Email</th><th>Nb Comptes</th></tr></thead>
+              <tbody><tr *ngFor="let c of customers"><td>{{ c.name }}</td><td>{{ c.email }}</td><td>{{ getCustomerAccountCount(c.id!) }}</td></tr></tbody>
+            </table>
+          </div>
+        </div></div>
+        <div class="col-md-6"><div class="card mb-4"><div class="card-header bg-dark text-white"><h5>Répartition des Comptes</h5></div>
+          <div class="card-body">
+            <table class="table table-sm"><thead><tr><th>Type</th><th>Nombre</th><th>Solde Total</th></tr></thead>
+              <tbody><tr><td>Courant</td><td>{{ currentCount }}</td><td>{{ currentTotal | number:'1.2-2' }} €</td></tr>
+                <tr><td>Épargne</td><td>{{ savingCount }}</td><td>{{ savingTotal | number:'1.2-2' }} €</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div></div>
+      </div>
+    </div>`
+})
+export class DashboardComponent implements OnInit {
+    customers: Customer[] = []; accounts: BankAccount[] = [];
+    totalCustomers = 0; totalAccounts = 0; totalBalance = 0; averageBalance = 0;
+    currentCount = 0; savingCount = 0; currentTotal = 0; savingTotal = 0;
+    constructor(private customerService: CustomerService, private accountService: AccountService) {}
+    ngOnInit(): void {
+        this.customerService.getCustomers().subscribe(d => { this.customers = d; this.totalCustomers = d.length; });
+        this.accountService.getAccounts().subscribe(d => {
+            this.accounts = d; this.totalAccounts = d.length; this.totalBalance = d.reduce((s, a) => s + a.balance, 0);
+            this.averageBalance = d.length > 0 ? this.totalBalance / d.length : 0;
+            this.currentCount = d.filter(a => a.type === 'CA').length; this.savingCount = d.filter(a => a.type === 'SA').length;
+            this.currentTotal = d.filter(a => a.type === 'CA').reduce((s, a) => s + a.balance, 0);
+            this.savingTotal = d.filter(a => a.type === 'SA').reduce((s, a) => s + a.balance, 0);
+        });
+    }
+    getCustomerAccountCount(id: number): number { return this.accounts.filter(a => a.customerDTO?.id === id).length; }
+}
+
+App Component & Config
+──────────────────────
+@Component({
+    selector: 'app-root', standalone: true, imports: [RouterOutlet, RouterModule, CommonModule],
+    template: `
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark" *ngIf="authService.isAuthenticated()">
+      <div class="container-fluid">
+        <a class="navbar-brand" routerLink="/dashboard"><strong>BankApp</strong></a>
+        <div class="collapse navbar-collapse">
+          <ul class="navbar-nav me-auto">
+            <li class="nav-item"><a class="nav-link" routerLink="/dashboard" routerLinkActive="active">Dashboard</a></li>
+            <li class="nav-item"><a class="nav-link" routerLink="/customers" routerLinkActive="active">Clients</a></li>
+            <li class="nav-item"><a class="nav-link" routerLink="/accounts" routerLinkActive="active">Comptes</a></li>
+          </ul>
+          <button class="btn btn-outline-light btn-sm" (click)="authService.logout()">Déconnexion</button>
+        </div>
+      </div>
+    </nav>
+    <router-outlet></router-outlet>`
+})
+export class AppComponent { constructor(public authService: AuthService) {} }
+
+export const appConfig: ApplicationConfig = {
+    providers: [provideRouter(routes), provideHttpClient(),
+        { provide: HTTP_INTERCEPTORS, useClass: JwtInterceptor, multi: true }]
+};
+
+bootstrapApplication(AppComponent, appConfig).catch(err => console.error(err));
+
+PARTIE 3 : JWT SECURITY (Backend)
+══════════════════════════════════
+
+3.1 Entités sécurité
+─────────────────────
+@Entity @Data @NoArgsConstructor @AllArgsConstructor @Builder
+public class AppUser {
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    @Column(unique = true) private String username;
+    private String password;
+    private boolean active;
+    @ManyToMany(fetch = FetchType.EAGER)
+    private List<AppRole> roles;
+}
+
+@Entity @Data @NoArgsConstructor @AllArgsConstructor @Builder
+public class AppRole {
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    private String roleName;
+}
+
+3.2 Repos sécurité
+──────────────────
+public interface AppUserRepository extends JpaRepository<AppUser, Long> {
+    AppUser findByUsername(String username);
+}
+public interface AppRoleRepository extends JpaRepository<AppRole, Long> {
+    AppRole findByRoleName(String roleName);
+}
+
+3.3 JwtUtil
+────────────
+@Component
+public class JwtUtil {
+    @Value("${jwt.secret}") private String jwtSecret;
+    @Value("${jwt.expiration}") private long jwtExpiration;
+
+    private SecretKey getSigningKey() { return Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8)); }
+
+    public String generateAccessToken(String username) {
+        return Jwts.builder().setSubject(username).setIssuedAt(new Date())
+            .setExpiration(new Date(System.currentTimeMillis() + jwtExpiration))
+            .signWith(getSigningKey()).compact();
+    }
+
+    public String generateRefreshToken(String username) {
+        return Jwts.builder().setSubject(username).setIssuedAt(new Date())
+            .setExpiration(new Date(System.currentTimeMillis() + jwtExpiration * 7))
+            .signWith(getSigningKey()).compact();
+    }
+
+    public String getUsernameFromToken(String token) {
+        return Jwts.parserBuilder().setSigningKey(getSigningKey()).build()
+            .parseClaimsJws(token).getBody().getSubject();
+    }
+
+    public boolean validateToken(String token) {
+        try { Jwts.parserBuilder().setSigningKey(getSigningKey()).build().parseClaimsJws(token); return true; }
+        catch (JwtException | IllegalArgumentException e) { return false; }
+    }
+}
+
+3.4 JwtAuthenticationFilter
+─────────────────────────────
+// Filtre pour l'authentification : intercepte POST /api/auth/login
+public class JwtAuthenticationFilter extends UsernamePasswordAuthenticationFilter {
+    private final AuthenticationManager authenticationManager;
+    private final JwtUtil jwtUtil;
+
+    public JwtAuthenticationFilter(AuthenticationManager am, JwtUtil jwtUtil) {
+        this.authenticationManager = am;
+        this.jwtUtil = jwtUtil;
+        setFilterProcessesUrl("/api/auth/login");
+    }
+
+    @Override
+    public Authentication attemptAuthentication(HttpServletRequest request, HttpServletResponse response) {
+        try {
+            Map<String, String> credentials = new ObjectMapper().readValue(request.getInputStream(), Map.class);
+            return authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(credentials.get("username"), credentials.get("password")));
+        } catch (IOException e) { throw new RuntimeException(e); }
+    }
+
+    @Override
+    protected void successfulAuthentication(HttpServletRequest request, HttpServletResponse response,
+                                            FilterChain chain, Authentication authResult) throws IOException {
+        String accessToken = jwtUtil.generateAccessToken(authResult.getName());
+        String refreshToken = jwtUtil.generateRefreshToken(authResult.getName());
+        response.setContentType("application/json");
+        new ObjectMapper().writeValue(response.getOutputStream(), Map.of("accessToken", accessToken, "refreshToken", refreshToken));
+    }
+}
+
+3.5 JwtAuthorizationFilter
+────────────────────────────
+// Filtre qui valide le token sur chaque requête
+@Component
+public class JwtAuthorizationFilter extends OncePerRequestFilter {
+    private final JwtUtil jwtUtil;
+    private final UserDetailsService userDetailsService;
+
+    public JwtAuthorizationFilter(JwtUtil jwtUtil, UserDetailsService userDetailsService) {
+        this.jwtUtil = jwtUtil;
+        this.userDetailsService = userDetailsService;
+    }
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
+                                    FilterChain filterChain) throws ServletException, IOException {
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            String token = authHeader.substring(7);
+            if (jwtUtil.validateToken(token)) {
+                String username = jwtUtil.getUsernameFromToken(token);
+                UserDetails userDetails = userDetailsService.loadUserByUsername(username);
+                UsernamePasswordAuthenticationToken authToken =
+                    new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
+                authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                SecurityContextHolder.getContext().setAuthentication(authToken);
+            }
+        }
+        filterChain.doFilter(request, response);
+    }
+}
+
+3.6 UserDetailsServiceImpl
+───────────────────────────
+@Service
+public class UserDetailsServiceImpl implements UserDetailsService {
+    private final AppUserRepository appUserRepository;
+    public UserDetailsServiceImpl(AppUserRepository appUserRepository) { this.appUserRepository = appUserRepository; }
+
+    @Override
+    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+        AppUser appUser = appUserRepository.findByUsername(username);
+        if (appUser == null) throw new UsernameNotFoundException("User not found");
+        return User.withUsername(appUser.getUsername()).password(appUser.getPassword())
+            .roles(appUser.getRoles().stream().map(r -> r.getRoleName().replace("ROLE_", "")).toArray(String[]::new))
+            .disabled(!appUser.isActive()).build();
+    }
+}
+
+3.7 SecurityConfig
+──────────────────
+@Configuration @EnableWebSecurity
+public class SecurityConfig {
+    private final JwtUtil jwtUtil;
+    private final JwtAuthorizationFilter jwtAuthorizationFilter;
+
+    public SecurityConfig(JwtUtil jwtUtil, JwtAuthorizationFilter jwtAuthorizationFilter) {
+        this.jwtUtil = jwtUtil;
+        this.jwtAuthorizationFilter = jwtAuthorizationFilter;
+    }
+
+    @Bean public PasswordEncoder passwordEncoder() { return new BCryptPasswordEncoder(); }
+    @Bean public AuthenticationManager authenticationManager(AuthenticationConfiguration ac) throws Exception { return ac.getAuthenticationManager(); }
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http
+            .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api/auth/login/**", "/api/auth/refresh/**", "/h2-console/**", "/swagger-ui/**", "/api-docs/**").permitAll()
+                .requestMatchers("/api/**").authenticated()
+                .anyRequest().permitAll())
+            .headers(headers -> headers.frameOptions(frame -> frame.disable()))
+            .addFilter(new JwtAuthenticationFilter(http.getSharedObject(AuthenticationConfiguration.class).getAuthenticationManager(), jwtUtil))
+            .addFilterBefore(jwtAuthorizationFilter, UsernamePasswordAuthenticationFilter.class);
+        return http.build();
+    }
+
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowedOrigins(List.of("*"));
+        config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type"));
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
+    }
+}
+
+3.8 Seed users (à ajouter dans BankAccountApplication.java)
+─────────────────────────────────────────────────────────────
+@Bean
+CommandLineRunner initUsers(AppUserRepository appUserRepository, AppRoleRepository appRoleRepository, PasswordEncoder passwordEncoder) {
+    return args -> {
+        AppRole adminRole = appRoleRepository.save(AppRole.builder().roleName("ADMIN").build());
+        AppRole userRole = appRoleRepository.save(AppRole.builder().roleName("USER").build());
+        appUserRepository.save(AppUser.builder().username("admin").password(passwordEncoder.encode("admin123")).active(true).roles(List.of(adminRole, userRole)).build());
+        appUserRepository.save(AppUser.builder().username("user").password(passwordEncoder.encode("user123")).active(true).roles(List.of(userRole)).build());
+        System.out.println("Users créés: admin/admin123, user/user123");
+    };
+}
+
+PARTIE 4 : CHATBOT RAG
+═══════════════════════
+
+4.1 Service RAG
+────────────────
+// Système RAG simple : il regarde d'abord dans les données bancaires, sinon appelle OpenAI
+@Service
+public class RagChatBotService {
+    private final BankService bankService;
+    private static final String OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
+
+    public RagChatBotService(BankService bankService) { this.bankService = bankService; }
+
+    public String processMessage(String userMessage) {
+        String contextData = retrieveContextData(userMessage.toLowerCase());
+        return contextData != null ? contextData : callOpenAI(userMessage);
+    }
+
+    private String retrieveContextData(String message) {
+        if (message.contains("client") || message.contains("customer")) {
+            List<CustomerDTO> customers = bankService.listCustomers();
+            if (customers.isEmpty()) return "Aucun client trouvé.";
+            return "Clients:\n" + customers.stream().map(c -> "  - " + c.getName() + " (" + c.getEmail() + ")").collect(Collectors.joining("\n"));
+        }
+        if (message.contains("compte") || message.contains("account")) {
+            List<BankAccountDTO> accounts = bankService.listAccounts();
+            if (accounts.isEmpty()) return "Aucun compte trouvé.";
+            return "Comptes:\n" + accounts.stream().map(a -> "  - " + a.getId().substring(0, 8) + "... | Solde: " + a.getBalance() + "€ | " + a.getCustomerDTO().getName()).collect(Collectors.joining("\n"));
+        }
+        if (message.contains("solde") || message.contains("balance")) {
+            double total = bankService.listAccounts().stream().mapToDouble(BankAccountDTO::getBalance).sum();
+            return "Solde total de tous les comptes : " + total + " €.";
+        }
+        return null;
+    }
+
+    private String callOpenAI(String message) {
+        // Remplacez YOUR_OPENAI_API_KEY et décommentez les lignes HttpClient
+        return "Je suis un assistant bancaire. Questions possibles: clients, comptes, soldes.";
+    }
+}
+
+@RestController @RequestMapping("/api/chat") @CrossOrigin("*")
+public class ChatBotRestController {
+    private final RagChatBotService chatBotService;
+    public ChatBotRestController(RagChatBotService s) { this.chatBotService = s; }
+    @PostMapping
+    public ChatResponse chat(@RequestBody ChatRequest request) {
+        return new ChatResponse(chatBotService.processMessage(request.getMessage()));
+    }
+}
+
+// DTOs pour le chat
+public class ChatRequest { private String message; /* getter/setter */ }
+public class ChatResponse { private String reply; /* getter/setter */ }
+
+4.2 Chatbot Component (Angular)
+────────────────────────────────
+@Component({
+    selector: 'app-chatbot', standalone: true, imports: [CommonModule, FormsModule],
+    template: `
+    <div class="container mt-4"><div class="card">
+      <div class="card-header bg-primary text-white"><h4>Assistant Bancaire</h4></div>
+      <div class="card-body" style="height:400px;overflow-y:auto" #chatBox>
+        <div *ngFor="let msg of messages" class="mb-3" [class.text-end]="msg.role==='user'">
+          <div class="d-inline-block p-2 rounded" [class.bg-primary]="msg.role==='user'" [class.bg-light]="msg.role==='bot'" [class.text-white]="msg.role==='user'">
+            <strong>{{ msg.role==='user'?'Vous':'Bot' }}:</strong> {{ msg.content }}
+          </div>
+        </div>
+      </div>
+      <div class="card-footer">
+        <div class="input-group">
+          <input type="text" class="form-control" [(ngModel)]="userMessage" (keyup.enter)="sendMessage()" placeholder="Question...">
+          <button class="btn btn-primary" (click)="sendMessage()" [disabled]="loading">{{ loading?'...':'Envoyer' }}</button>
+        </div>
+      </div>
+    </div></div>`
+})
+export class ChatbotComponent {
+    messages = [{ role: 'bot', content: 'Bonjour ! Assistant bancaire. Questions sur clients, comptes, soldes.' }];
+    userMessage = ''; loading = false;
+    constructor(private http: HttpClient) {}
+    sendMessage(): void {
+        if (!this.userMessage.trim()) return;
+        this.messages.push({ role: 'user', content: this.userMessage }); this.loading = true;
+        this.http.post<any>('http://localhost:8085/api/chat', { message: this.userMessage }).subscribe({
+            next: res => { this.messages.push({ role: 'bot', content: res.reply }); this.loading = false; },
+            error: () => { this.messages.push({ role: 'bot', content: 'Erreur de connexion.' }); this.loading = false; }
+        });
+        this.userMessage = '';
+    }
+}
+
+PARTIE 5 : DASHBOARD AVEC CHARTJS
+══════════════════════════════════
+
+npm install ng2-charts chart.js
+
+@Component({
+    selector: 'app-dashboard', standalone: true, imports: [CommonModule, NgChartsModule],
+    template: `
+    <div class="container mt-4">
+      <h2>Tableau de Bord</h2>
+      <div class="row mb-4">
+        <div class="col-md-3"><div class="card text-bg-primary"><div class="card-body text-center"><h5>Clients</h5><p class="display-6">{{ totalCustomers }}</p></div></div></div>
+        <div class="col-md-3"><div class="card text-bg-success"><div class="card-body text-center"><h5>Comptes</h5><p class="display-6">{{ totalAccounts }}</p></div></div></div>
+        <div class="col-md-3"><div class="card text-bg-warning"><div class="card-body text-center"><h5>Solde Total</h5><p class="display-6">{{ totalBalance | number:'1.0-0' }} €</p></div></div></div>
+        <div class="col-md-3"><div class="card text-bg-info"><div class="card-body text-center"><h5>Opérations</h5><p class="display-6">{{ totalOperations }}</p></div></div></div>
+      </div>
+      <div class="row mb-4">
+        <div class="col-md-6"><div class="card"><div class="card-header bg-dark text-white"><h5>Répartition des Comptes</h5></div>
+          <div class="card-body"><canvas baseChart [data]="pieChartData" [type]="pieChartType" [options]="pieChartOptions" style="max-height:300px"></canvas></div>
+        </div></div>
+        <div class="col-md-6"><div class="card"><div class="card-header bg-dark text-white"><h5>Soldes par Client</h5></div>
+          <div class="card-body"><canvas baseChart [data]="barChartData" [type]="barChartType" [options]="barChartOptions" style="max-height:300px"></canvas></div>
+        </div></div>
+      </div>
+      <div class="card mb-4"><div class="card-header bg-dark text-white"><h5>Clients et comptes</h5></div>
+        <div class="card-body">
+          <table class="table table-striped"><thead><tr><th>Nom</th><th>Email</th><th>Nb Comptes</th><th>Solde Total</th></tr></thead>
+            <tbody><tr *ngFor="let c of customers"><td>{{ c.name }}</td><td>{{ c.email }}</td><td>{{ getCustomerAccountCount(c.id!) }}</td><td>{{ getCustomerTotalBalance(c.id!) | number:'1.2-2' }} €</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>`
+})
+export class DashboardComponent implements OnInit {
+    customers: Customer[] = []; accounts: BankAccount[] = [];
+    totalCustomers = 0; totalAccounts = 0; totalBalance = 0; totalOperations = 0;
+
+    pieChartType: ChartType = 'pie';
+    pieChartData: ChartData<'pie'> = { labels: ['Courants', 'Épargne'], datasets: [{ data: [0, 0], backgroundColor: ['#0d6efd', '#ffc107'] }] };
+    pieChartOptions: ChartConfiguration['options'] = { responsive: true, plugins: { legend: { position: 'bottom' } } };
+
+    barChartType: ChartType = 'bar';
+    barChartData: ChartData<'bar'> = { labels: [], datasets: [{ label: 'Solde (€)', data: [], backgroundColor: '#198754' }] };
+    barChartOptions: ChartConfiguration['options'] = { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } };
+
+    constructor(private customerService: CustomerService, private accountService: AccountService) {}
+
+    ngOnInit(): void {
+        this.customerService.getCustomers().subscribe(d => { this.customers = d; this.totalCustomers = d.length; });
+        this.accountService.getAccounts().subscribe(d => {
+            this.accounts = d; this.totalAccounts = d.length; this.totalBalance = d.reduce((s, a) => s + a.balance, 0); this.updateCharts();
+        });
+    }
+    updateCharts(): void {
+        this.pieChartData.datasets[0].data = [this.accounts.filter(a => a.type === 'CA').length, this.accounts.filter(a => a.type === 'SA').length];
+        this.barChartData.labels = this.customers.map(c => c.name);
+        this.barChartData.datasets[0].data = this.customers.map(c => this.accounts.filter(a => a.customerDTO?.id === c.id).reduce((s, a) => s + a.balance, 0));
+    }
+    getCustomerAccountCount(id: number): number { return this.accounts.filter(a => a.customerDTO?.id === id).length; }
+    getCustomerTotalBalance(id: number): number { return this.accounts.filter(a => a.customerDTO?.id === id).reduce((s, a) => s + a.balance, 0); }
+}
+
+GUIDE D'EXÉCUTION
+══════════════════
+
+Backend :
+  cd bank-account-backend
+  mvn clean spring-boot:run    → http://localhost:8085
+  Swagger : /swagger-ui.html
+  H2 : /h2-console
+
+Angular :
+  ng new bank-account-angular --routing --style=css
+  npm install ng2-charts chart.js
+  ng serve                     → http://localhost:4200
+
+Utilisateurs :
+  admin / admin123 (ADMIN + USER)
+  user / user123 (USER)
+
+API Login :
+  POST /api/auth/login
+  Body : { "username": "admin", "password": "admin123" }
+  → { "accessToken": "...", "refreshToken": "..." }
+
+Résultats attendus
+══════════════════
+1. Backend REST sur 8085 avec Swagger
+2. JWT auth stateless
+3. CRUD clients, comptes, opérations
+4. Chatbot RAG
+5. Angular avec login, dashboard ChartJS, gestion clients/comptes
+6. Navigation sécurisée (AuthGuard + JWT Interceptor)
+
+Captures
+════════
+1. Swagger UI
+2. H2 Console
+3. Test API login (Postman/curl)
+4. Angular page de login
+5. Dashboard avec graphiques
+6. Liste clients
+7. Formulaire client
+8. Liste comptes
+9. Détail compte + historique
+10. Opérations crédit/débit/transfert
+11. Chatbot
+12. Console backend logs
+13. Structure Spring Boot
+14. Structure Angular
+
+IMPORTANT : NE PAS COMMITTER DE CLÉ API OPENAI
+════════════════════════════════════════════════
+Obtenez votre clé sur https://platform.openai.com
+Remplacez dans RagChatBotService.java et décommentez les appels HttpClient.
+
+Vidéos : https://www.youtube.com/watch?v=x6gFWmRxNPE

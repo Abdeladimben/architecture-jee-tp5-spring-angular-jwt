@@ -1,0 +1,38 @@
+# Maven / Java
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.log
+*.tmp
+
+# IDE
+.idea/
+*.iml
+.settings/
+.project
+.classpath
+.vscode/
+.history/
+
+# Node / Angular
+node_modules/
+dist/
+.angular/
+*.tgz
+.cache/
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Environment
+.env
+.env.local
+*.pem
+
+# Exclude markdown files (TP subject/solution)
+*.md
